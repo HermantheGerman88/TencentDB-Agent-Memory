@@ -22,6 +22,11 @@ stack-stop.cmd           :: stops proxy/panel/knowledge; gateway keeps running
 stack-stop.cmd all       :: also stops the gateway container
 ```
 
+Per-service starters: `MemoryCore\memory-core-start.cmd hybrid` (gateway, checks net+Ollama, boots Podman machine), `MemoryProxy\proxy-start.cmd`, `MemoryKnowledge\knowledge-start.cmd`, `MemoryPanel\panel-start.cmd`. Backup: `MemoryCore\memory-core-backup.cmd` (Podman volume export, keeps 14).
+Autostart is a Startup-folder shortcut (`stack-start.cmd /quiet`), not schtasks (needs admin).
+
+Local runbooks (this machine, contain live secrets — read, never quote keys): `L:\Musik\MultiAgent\Frontend\docs\TENCENTDB-AGENT-MEMORY-BEDIENUNG.md` (ops), `TENCENTDB-BEFEHLE.md` (copy-paste), `TENCENTDB-SETUP-SCHRITTE.md` (rebuild), `TENCENTDB-CHECKLISTE.md` (status log).
+
 Start order matters: gateway first, wait ~25s for auth, then proxy+knowledge, panel last (`stack-start.cmd` does this). Each service health-checks `/health` after start.
 
 Docker path instead: `cd deploy/global-images && cp .env.example .env` (fill both LLM groups), `./start-all.sh`, `./stop-all.sh`.

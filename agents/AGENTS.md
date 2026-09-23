@@ -13,6 +13,9 @@ Each framework dir (`openclaw/`, `hermes/`, `workbuddy/`, `claude-code/`, `codex
 ## RULES
 
 - Clients connect to the **proxy** (`:8096`), never directly to the gateway (`:8420`) — gateway-direct bypasses injection/write-back.
+- Exceptions on this machine: OpenClaw runs via `MemoryCore/openclaw-plugin` (not proxy); Hermes intentionally stays out (own memory).
+- `setup-proxy.sh` needs jq + relative `TMPDIR`, overwrites agent configs with `*.bak.<ts>` backups (restore path documented in runbook).
+- Per-agent user-keys: `MemoryCore/scripts/setup-agent-keys.py` (idempotent, registry `MemoryCore/.agent-keys.json`, gitignored).
 - Per-framework quirks live in that framework's README; do not generalize across dirs.
 - New framework = new dir + README (+ proxy adapter only if protocol needs it, see `MemoryProxy/src/session/` + `agent-adapters/`).
 
