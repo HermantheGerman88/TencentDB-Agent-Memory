@@ -38,5 +38,5 @@ tailwind.config.js postcss.config.js .eslintrc.cjs .prettierrc
 
 ```bash
 npm install && npm run dev     # needs backend on :8123
-npm run build                  # → web/dist/
+npx vite build                 # → web/dist/ (NOT npm run build: tsc aborts on src/stores/backend.ts TS7006)
 ```
