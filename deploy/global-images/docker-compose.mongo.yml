@@ -1,0 +1,92 @@
+# ============================================================
+# TDAI — Mongo-Metadaten-Variante (Compose)
+# ============================================================
+# Zweck: Metadaten-Ebene (audit / skills / instances) nach MongoDB statt SQLite.
+#        Evaluations- und Multi-User-Szenario, nicht der Default-Pfad.
+#
+# Starten:  ./start-all-mongo.sh          (laedt .env, prueft, dann compose up)
+# Stoppen:  docker compose -f docker-compose.mongo.yml down      (Volumes bleiben)
+# Löschen:  docker compose -f docker-compose.mongo.yml down -v   (inkl. $search-Index)
+#
+# ── WICHTIG: zwei Ebenen, nur eine davon kann Mongo ──────────────────────────
+#   Metadaten-Ebene   sqlite | mongodb | mysql(stub)   <-- HIER greift Mongo
+#   Memory/Vector-Ebene  sqlite | tcvdb               <-- KEIN Mongo, kein Adapter
+# Ein "vollstaendiger" Umzug auf Mongo ist mit dem heutigen Code nicht moeglich.
+# ============================================================
+
+services:
+  # ── MongoDB 8.3 + mongot (Lucene/$search) ──────────────────────────────────
+  mongo-search:
+    image: mongodb/mongodb-atlas-local:8.3
+    container_name: tdai-mongo-search
+    # TRAP 1: hostname MUSS fix sein. Der atlas-local-Runner initialisiert das
+    # Single-Node-ReplicaSet ueber den Container-Hostnamen. Wird der Container
+    # neu gebaut und der Hostname aendert sich, passt die im Volume liegende
+    # RS-Konfiguration nicht mehr -> es wird NIE ein Primary gewaehlt.
+    hostname: mongo-search
+    environment:
+      - MONGOT_LOG_FILE=/dev/stderr
+      - RUNNER_LOG_FILE=/dev/stderr
+    volumes:
+      - tdai-mongo-db:/data/db
+      - tdai-mongo-configdb:/data/configdb
+      # TRAP 4: /data/mongot muss persistiert werden, sonst sind die $search-
+      # Indizes nach jedem Neustart weg.
+      - tdai-mongo-mongot:/data/mongot
+    healthcheck:
+      # TRAP 2 (Counterpart): plain ping ist auch OHNE Primary erfolgreich.
+      # depends_on wuerde den Gateway zu frueh starten -> auf isWritablePrimary warten.
+      test: ["CMD", "mongosh", "--quiet", "--eval",
+             "if (db.adminCommand('hello').isWritablePrimary === true) process.exit(0); else process.exit(1)"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+    # TRAP 3: KEIN --replSet und KEIN command:-Override. Das Image bildet das
+    # ReplicaSet in seinem eigenen ENTRYPOINT; ein Override bricht mongot.
+
+  # ── TDAI Memory Core ───────────────────────────────────────────────────────
+  memory-core:
+    image: ${MEMORY_CORE_IMAGE:?MEMORY_CORE_IMAGE fehlt — bitte .env laden}
+    container_name: tdai-memory-core-mongo
+    ports:
+      - "${MEMORY_CORE_PORT:-8420}:8420"
+    volumes:
+      - ${MEMORY_CORE_VOLUME:-tdai-memory-core-data}:/data/tdai-memory
+    environment:
+      # ── Metadaten-Ebene: DAS ist der Schalter, der wirklich wirkt ──────────
+      # Presence alone selects backend "mongodb" (metadata/store/factory.ts:77-87).
+      # TRAP 3b: directConnection=true ist Pflicht (Single-Node-RS ohne SD).
+      - TDAI_METADATA_MONGO_URI=mongodb://mongo-search:27017/?directConnection=true
+      - TDAI_METADATA_MONGO_DB_PREFIX=${TDAI_METADATA_MONGO_DB_PREFIX:-tdai_metadata}
+      - TDAI_METADATA_MONGO_TRANSACTIONS=${TDAI_METADATA_MONGO_TRANSACTIONS:-true}
+      - TDAI_METADATA_STORE_CACHE_MAX=${TDAI_METADATA_STORE_CACHE_MAX:-16}
+
+      # ── Memory/Vector-Ebene: bewusst NICHT auf Mongo gestellt ──────────────
+      # STORE_MODE akzeptiert nur "sqlite" | "tcvdb" (gateway/server.ts:1788).
+      # Jeder andere Wert — auch "mongodb" — ergibt undefined und faellt
+      # stillschweigend auf deployMode-Default (hier: sqlite) zurueck.
+      # Explizit hinschreiben, damit der Zustand sichtbar ist und nicht aus
+      # einem ungueltigen Wert "versehentlich richtig" herauskommt.
+      - STORE_MODE=sqlite
+
+      # ── Gateway / LLM ───────────────────────────────────────────────────────
+      - TDAI_GATEWAY_API_KEY=${MEMORY_CORE_GATEWAY_API_KEY:-}
+      - TDAI_LLM_BASE_URL=${MEMORY_LLM_BASE_URL:?MEMORY_LLM_BASE_URL fehlt}
+      - TDAI_LLM_API_KEY=${MEMORY_LLM_API_KEY:?MEMORY_LLM_API_KEY fehlt}
+      - TDAI_LLM_MODEL=${MEMORY_LLM_MODEL:?MEMORY_LLM_MODEL fehlt}
+    depends_on:
+      mongo-search:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8420/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+volumes:
+  tdai-mongo-db:
+  tdai-mongo-configdb:
+  tdai-mongo-mongot:
+  tdai-memory-core-data:
