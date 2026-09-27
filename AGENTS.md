@@ -34,21 +34,24 @@ Docker path instead: `cd deploy/global-images && cp .env.example .env` (fill bot
 ## Node versions — strict split
 
 - Proxy + Knowledge: **Node 22 only**. Proxy hard-exits on any other major (`src/index.ts` version gate). `better-sqlite3` in Knowledge has no Node-24 prebuild.
-- Panel: **Node 24** (system node), and it must be built first: `npm run build` → `dist/index.js` (`stack-start.cmd` refuses to start without it).
+- Panel: **Node 24** (system node), and it must be built first: `pnpm build` → `dist/index.js` (`stack-start.cmd` refuses to start without it).
 - Baseline per `CONTRIBUTING.md`: Node ≥ 22.16, `npm`/`pnpm`, Python ≥ 3.9 only for `sdk` Python parts / migration scripts.
 
 ## Verify per module
 
 ```bash
-cd MemoryProxy|MemoryKnowledge|MemoryPanel
+cd MemoryProxy|MemoryKnowledge
 npm test            # vitest run
 npx tsc --noEmit    # typecheck (script name: "typecheck")
+cd MemoryPanel
+pnpm test           # vitest run (pnpm workspace — see MemoryPanel/AGENTS.md)
+npx tsc --noEmit    # typecheck
 cd MemoryCore
 npm test            # vitest run; OSS-only variant: npm run test:oss
 npm run build       # tsdown: build:plugin + build:scripts (needed for bin/* CLIs)
 ```
 
-No repo-wide lint/typecheck/test runner — run verification inside the touched module. Order when it matters: `typecheck → test`; rebuild Panel (`npm run build`) after changing its backend.
+No repo-wide lint/typecheck/test runner — run verification inside the touched module. Order when it matters: `typecheck → test`; rebuild Panel (`pnpm build`) after changing its backend — MemoryPanel is a pnpm workspace, so `pnpm test`/`pnpm build` are authoritative and the root's generic `npm test` does not apply to Panel.
 
 ## Repo conventions
 
