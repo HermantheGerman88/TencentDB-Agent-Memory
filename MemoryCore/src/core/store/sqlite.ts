@@ -58,7 +58,7 @@ import type {
   AuditEntry,
   AuditQueryFilter,
 } from "./types.js";
-import { DEFAULT_ISOLATION_ID, rowMatchesIsolation } from "./types.js";
+import { DEFAULT_ISOLATION_ID, buildIsolationWhere, rowMatchesIsolation } from "./types.js";
 import { SKILLS_DDL, SKILL_FTS_DDL } from "../skill/skill-store-ddl.js";
 import type { Logger } from "../types.js";
 import type {
@@ -431,6 +431,11 @@ export class VectorStore implements IMemoryStore {
   private stmtL0FtsInsert!: StatementSync;
   private stmtL0FtsDelete!: StatementSync;
   private stmtL0FtsSearch!: StatementSync;
+  /**
+   * Filtered FTS5 search statements, cached per isolation-predicate shape.
+   * See {@link getFtsSearchStmt} for why the filter is pushed into SQL.
+   */
+  private readonly ftsSearchStmtCache = new Map<string, StatementSync>();
 
   /**
    * Create a VectorStore instance.
@@ -1123,6 +1128,10 @@ export class VectorStore implements IMemoryStore {
           timestamp UNINDEXED
         )
       `);
+
+      // Any cached filtered-search statement is bound to the FTS tables we are
+      // (re)creating here — drop them so they are re-prepared lazily.
+      this.ftsSearchStmtCache.clear();
 
       // L1 FTS prepared statements
       this.stmtL1FtsInsert = this.db.prepare(`
@@ -3138,6 +3147,53 @@ export class VectorStore implements IMemoryStore {
   }
 
   /**
+   * Build (and cache) an FTS5 search statement with the isolation filter pushed
+   * into SQL.
+   *
+   * Why push the filter down: the previous path retrieved a fixed top-N
+   * *unfiltered* (`max(limit*5, limit)`) and applied `rowMatchesIsolation` in JS.
+   * With a selective tenant that starves the result set — at 100k docs a 4 %
+   * tenant kept ~1 of the 5 requested rows — and it forces BM25 ranking of the
+   * whole match set. Putting the predicate in the `WHERE` clause makes `LIMIT`
+   * apply to the *filtered* stream, so recall is no longer capped by tenant
+   * selectivity.
+   *
+   * Statements are cached per predicate shape, so the hot path is one lookup;
+   * the filter-less case reuses the statements prepared in `initSchema`.
+   */
+  private getFtsSearchStmt(
+    which: "l1" | "l0",
+    filter: IsolationFilter | undefined,
+  ): { stmt: StatementSync; params: string[] } {
+    const { clause, params } = buildIsolationWhere(filter);
+    if (!clause) {
+      return { stmt: which === "l1" ? this.stmtL1FtsSearch : this.stmtL0FtsSearch, params };
+    }
+    const key = `${which}:${clause}`;
+    let stmt = this.ftsSearchStmtCache.get(key);
+    if (!stmt) {
+      const cols = which === "l1"
+        ? `record_id, content_original AS content, type, priority, scene_name,
+               session_key, session_id, team_id, task_id, user_id, agent_id, version,
+               timestamp_str, timestamp_start, timestamp_end,
+               metadata_json`
+        : `record_id, message_text_original AS message_text,
+               session_key, session_id, team_id, task_id, user_id, agent_id, role, recorded_at, timestamp`;
+      stmt = this.db.prepare(`
+        SELECT ${cols},
+               bm25(${which}_fts) AS rank
+        FROM ${which}_fts
+        WHERE ${which}_fts MATCH ?
+        AND ${clause}
+        ORDER BY rank ASC
+        LIMIT ?
+      `);
+      this.ftsSearchStmtCache.set(key, stmt);
+    }
+    return { stmt, params };
+  }
+
+  /**
    * FTS5 keyword search on L1 records.
    * Returns top-`limit` results sorted by BM25 relevance (highest first).
    *
@@ -3149,8 +3205,8 @@ export class VectorStore implements IMemoryStore {
   searchL1Fts(ftsQuery: string, limit = 20, filter?: IsolationFilter): FtsSearchResult[] {
     if (this.degraded || !this.ftsAvailable) return [];
     try {
-      const retrieveLimit = filter ? Math.max(limit * 5, limit) : limit;
-      const rows = this.stmtL1FtsSearch.all(ftsQuery, retrieveLimit) as Array<{
+      const { stmt, params } = this.getFtsSearchStmt("l1", filter);
+      const rows = stmt.all(ftsQuery, ...params, limit) as Array<{
         record_id: string;
         content: string;
         type: string;
@@ -3212,8 +3268,8 @@ export class VectorStore implements IMemoryStore {
   searchL0Fts(ftsQuery: string, limit = VectorStore.FTS_DEFAULT_LIMIT, filter?: IsolationFilter): L0FtsSearchResult[] {
     if (this.degraded || !this.ftsAvailable) return [];
     try {
-      const retrieveLimit = filter ? Math.max(limit * 5, limit) : limit;
-      const rows = this.stmtL0FtsSearch.all(ftsQuery, retrieveLimit) as Array<{
+      const { stmt, params } = this.getFtsSearchStmt("l0", filter);
+      const rows = stmt.all(ftsQuery, ...params, limit) as Array<{
         record_id: string;
         message_text: string;
         session_key: string;
