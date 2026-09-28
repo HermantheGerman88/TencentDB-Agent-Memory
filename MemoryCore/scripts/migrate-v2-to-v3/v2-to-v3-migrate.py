@@ -22,6 +22,7 @@ v2 → v3 数据迁移脚本
     python v2-to-v3-migrate.py /path/to/memory-tdai
     python v2-to-v3-migrate.py /path/to/memory-tdai --dry-run
     python v2-to-v3-migrate.py /path/to/memory-tdai --db-only     (仅迁移数据库，跳过 L2/L3 文件)
+    python v2-to-v3-migrate.py /path/to/memory-tdai --verify      (只读校验 v3 schema，退出码 0=已就绪 / 2=需要迁移 / 1=错误)
 """
 
 import argparse
@@ -159,6 +160,43 @@ CREATE VIRTUAL TABLE IF NOT EXISTS l0_fts USING fts5(
     timestamp               UNINDEXED
 );
 """
+
+# ============================================================
+# v3 schema 期望列（迁移 + 校验共用，单一事实来源）
+# ============================================================
+L1_RECORDS_NEW_COLUMNS = ["team_id", "task_id", "user_id", "agent_id", "version"]
+L0_CONVERSATIONS_NEW_COLUMNS = ["team_id", "task_id", "user_id", "agent_id"]
+
+L1_FTS_COLUMNS = [
+    "content", "content_original", "record_id", "type", "priority",
+    "scene_name", "session_key", "session_id",
+    "team_id", "task_id", "user_id", "agent_id", "version",
+    "timestamp_str", "timestamp_start", "timestamp_end", "metadata_json",
+]
+L0_FTS_COLUMNS = [
+    "message_text", "message_text_original", "record_id",
+    "session_key", "session_id",
+    "team_id", "task_id", "user_id", "agent_id",
+    "role", "recorded_at", "timestamp",
+]
+
+# FTS 重建时的 SELECT 源表达式：`*_original` 列在旧数据里并不存在，
+# 因此从主文本列复制（content -> content_original, message_text -> message_text_original）。
+L1_FTS_SOURCE_EXPRS = [
+    "content", "content", "record_id", "type", "priority",
+    "scene_name", "session_key", "session_id",
+    "team_id", "task_id", "user_id", "agent_id", "version",
+    "timestamp_str", "timestamp_start", "timestamp_end", "metadata_json",
+]
+L0_FTS_SOURCE_EXPRS = [
+    "message_text", "message_text", "record_id",
+    "session_key", "session_id",
+    "team_id", "task_id", "user_id", "agent_id",
+    "role", "recorded_at", "timestamp",
+]
+
+# 迁移新增的空表
+NEW_V3_TABLES = ["memory_audit", "skills", "skill_fts"]
 
 
 def log(msg: str):
@@ -313,6 +351,60 @@ def create_new_tables(db: sqlite3.Connection):
     log("  新增表创建完成")
 
 
+def _table_columns(db: sqlite3.Connection, table: str):
+    """返回表的所有列名集合；表不存在则返回 None。"""
+    row = db.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+        (table,)
+    ).fetchone()
+    if not row:
+        return None
+    return {r[1] for r in db.execute(f"PRAGMA table_info({table})").fetchall()}
+
+
+def verify_v3_schema(db: sqlite3.Connection):
+    """
+    只读校验 vectors.db 是否已具备 v3 schema。
+
+    返回 (is_v3, missing)，其中 missing 是缺失项的可读列表。
+    判定规则（与迁移逻辑一致）:
+      - l1_records / l0_conversations 已包含各自的租户隔离列
+      - l1_fts / l0_fts 已包含各自的全部新列（重建后应齐全）
+      - memory_audit / skills / skill_fts 三张新表已存在
+    """
+    missing = []
+
+    for table, cols in (
+        ("l1_records", L1_RECORDS_NEW_COLUMNS),
+        ("l0_conversations", L0_CONVERSATIONS_NEW_COLUMNS),
+    ):
+        actual = _table_columns(db, table)
+        if actual is None:
+            missing.append(f"表缺失: {table}")
+            continue
+        for c in cols:
+            if c not in actual:
+                missing.append(f"列缺失: {table}.{c}")
+
+    for table, cols in (
+        ("l1_fts", L1_FTS_COLUMNS),
+        ("l0_fts", L0_FTS_COLUMNS),
+    ):
+        actual = _table_columns(db, table)
+        if actual is None:
+            missing.append(f"FTS 表缺失: {table}")
+            continue
+        for c in cols:
+            if c not in actual:
+                missing.append(f"FTS 列缺失: {table}.{c}")
+
+    for table in NEW_V3_TABLES:
+        if _table_columns(db, table) is None:
+            missing.append(f"新表缺失: {table}")
+
+    return (len(missing) == 0, missing)
+
+
 def migrate_l2_l3_files(data_dir: str):
     """
     L2/L3 文件迁移：复制到 v3 profiles 目录。
@@ -381,6 +473,10 @@ def main():
         "--db-only", action="store_true",
         help="仅迁移数据库，跳过 L2/L3 文件迁移"
     )
+    parser.add_argument(
+        "--verify", action="store_true",
+        help="只读校验 v3 schema 是否已就绪；退出码 0=已就绪 / 2=需要迁移 / 1=错误"
+    )
     args = parser.parse_args()
 
     data_dir = os.path.abspath(args.data_dir)
@@ -389,6 +485,24 @@ def main():
     if not os.path.isfile(db_path):
         log(f"错误: 找不到 vectors.db: {db_path}")
         sys.exit(1)
+
+    # ---- 只读校验模式 ----
+    if args.verify:
+        log("[VERIFY 模式] 只读校验 v3 schema 是否已就绪")
+        try:
+            db = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+            is_v3, missing = verify_v3_schema(db)
+            db.close()
+        except Exception as e:  # noqa: BLE001
+            log(f"错误: 校验失败: {e}")
+            sys.exit(1)
+        if is_v3:
+            log("v3 schema 已就绪，无需迁移 (exit 0)")
+            sys.exit(0)
+        log("v3 schema 不完整，需要迁移 (exit 2):")
+        for m in missing:
+            log(f"  - {m}")
+        sys.exit(2)
 
     # ---- 连接数据库 ----
     log(f"数据目录: {data_dir}")
@@ -452,33 +566,13 @@ def main():
     # FTS 表重建
     rebuild_fts(
         db, "l1_fts", L1_FTS_DDL, "l1_records",
-        columns=[
-            "content", "content_original", "record_id", "type", "priority",
-            "scene_name", "session_key", "session_id",
-            "team_id", "task_id", "user_id", "agent_id", "version",
-            "timestamp_str", "timestamp_start", "timestamp_end", "metadata_json",
-        ],
-        source_exprs=[
-            "content", "content", "record_id", "type", "priority",
-            "scene_name", "session_key", "session_id",
-            "team_id", "task_id", "user_id", "agent_id", "version",
-            "timestamp_str", "timestamp_start", "timestamp_end", "metadata_json",
-        ],
+        columns=L1_FTS_COLUMNS,
+        source_exprs=L1_FTS_SOURCE_EXPRS,
     )
     rebuild_fts(
         db, "l0_fts", L0_FTS_DDL, "l0_conversations",
-        columns=[
-            "message_text", "message_text_original", "record_id",
-            "session_key", "session_id",
-            "team_id", "task_id", "user_id", "agent_id",
-            "role", "recorded_at", "timestamp",
-        ],
-        source_exprs=[
-            "message_text", "message_text", "record_id",
-            "session_key", "session_id",
-            "team_id", "task_id", "user_id", "agent_id",
-            "role", "recorded_at", "timestamp",
-        ],
+        columns=L0_FTS_COLUMNS,
+        source_exprs=L0_FTS_SOURCE_EXPRS,
     )
 
     # 新增表

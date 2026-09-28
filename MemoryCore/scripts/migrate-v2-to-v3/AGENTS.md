@@ -21,12 +21,15 @@ Single script `v2-to-v3-migrate.py` (Python ≥ 3.8, stdlib only) upgrades `vect
 python v2-to-v3-migrate.py /path/to/memory-tdai --dry-run   # always first
 python v2-to-v3-migrate.py /path/to/memory-tdai             # run (auto .bak)
 python v2-to-v3-migrate.py /path/to/memory-tdai --db-only   # schema only
+python v2-to-v3-migrate.py /path/to/memory-tdai --verify    # read-only; exit 0=v3, 2=needs migration, 1=error
 ```
 
 ## RULES
 
 - Dry-run first, always; run **before** starting the new gateway, never against a live data dir.
 - Fresh installs skip this entirely (gateway creates v3 natively).
+- `--verify` is a safe, read-only gate (opens `mode=ro`, no backup, no writes): use it in
+  install/CI scripts to decide whether a migration is needed before touching data.
 - Rollback = restore `vectors.db` from `.bak.{timestamp}`; L2/L3 sources are untouched originals.
 - Re-runs safe (existing columns/files skipped).
 

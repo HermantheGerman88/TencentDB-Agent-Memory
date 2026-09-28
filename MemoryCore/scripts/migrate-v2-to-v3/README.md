@@ -27,6 +27,9 @@ python v2-to-v3-migrate.py /path/to/memory-tdai
 
 # 3. Database only (skip L2/L3 file migration)
 python v2-to-v3-migrate.py /path/to/memory-tdai --db-only
+
+# 4. Read-only check: is this data dir already v3?
+python v2-to-v3-migrate.py /path/to/memory-tdai --verify
 ```
 
 ### Options
@@ -37,6 +40,19 @@ python v2-to-v3-migrate.py /path/to/memory-tdai --db-only
 | `--dry-run` | Inspect only, no changes |
 | `--db-only` | Migrate `vectors.db` schema only, skip L2/L3 files |
 | `--no-backup` | Skip automatic backup (a `.bak` file is created by default) |
+| `--verify` | Read-only schema check. Exit code `0` = already v3, `2` = migration needed, `1` = error |
+
+### Verify mode
+
+`--verify` opens `vectors.db` read-only (`mode=ro`), writes nothing and creates no backup.
+It reports every missing v3 artifact (tenant columns on `l1_records`/`l0_conversations`,
+the rebuilt `l1_fts`/`l0_fts` columns, and the `memory_audit`/`skills`/`skill_fts` tables)
+and signals the result purely through its exit code, so it can be used as a gate in
+install or CI scripts:
+
+```bash
+python v2-to-v3-migrate.py /path/to/memory-tdai --verify && echo "already v3"
+```
 
 ## What Gets Migrated
 

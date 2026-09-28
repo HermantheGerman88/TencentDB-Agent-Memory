@@ -27,6 +27,9 @@ python v2-to-v3-migrate.py /path/to/memory-tdai
 
 # 3. 仅迁移数据库（跳过 L2/L3 文件）
 python v2-to-v3-migrate.py /path/to/memory-tdai --db-only
+
+# 4. 只读校验：该数据目录是否已是 v3？
+python v2-to-v3-migrate.py /path/to/memory-tdai --verify
 ```
 
 ### 参数说明
@@ -37,6 +40,18 @@ python v2-to-v3-migrate.py /path/to/memory-tdai --db-only
 | `--dry-run` | 仅检查，不实际修改 |
 | `--db-only` | 仅迁移 `vectors.db` 表结构，跳过 L2/L3 文件 |
 | `--no-backup` | 跳过自动备份（默认会自动创建 `.bak` 文件） |
+| `--verify` | 只读校验 v3 schema。退出码 `0`=已就绪 / `2`=需要迁移 / `1`=错误 |
+
+### verify 模式
+
+`--verify` 以只读方式（`mode=ro`）打开 `vectors.db`，不写任何数据、不创建备份。
+它会逐项列出缺失的 v3 元素（`l1_records`/`l0_conversations` 的租户隔离列、重建后的
+`l1_fts`/`l0_fts` 列、以及 `memory_audit`/`skills`/`skill_fts` 三张新表），
+仅通过退出码表达结论，可直接用于安装脚本或 CI 的判定：
+
+```bash
+python v2-to-v3-migrate.py /path/to/memory-tdai --verify && echo "已是 v3"
+```
 
 ## 迁移内容
 
