@@ -64,8 +64,8 @@ services:
 
       # ── Memory/Vector-Ebene: bewusst NICHT auf Mongo gestellt ──────────────
       # STORE_MODE akzeptiert nur "sqlite" | "tcvdb" (gateway/server.ts:1788).
-      # Jeder andere Wert — auch "mongodb" — ergibt undefined und faellt
-      # stillschweigend auf deployMode-Default (hier: sqlite) zurueck.
+      # Jeder andere Wert — auch "mongodb" — warnt jetzt laut ([CONFIG] ...)
+      # und faellt auf den deployMode-Default (hier: sqlite) zurueck.
       # Explizit hinschreiben, damit der Zustand sichtbar ist und nicht aus
       # einem ungueltigen Wert "versehentlich richtig" herauskommt.
       - STORE_MODE=sqlite
