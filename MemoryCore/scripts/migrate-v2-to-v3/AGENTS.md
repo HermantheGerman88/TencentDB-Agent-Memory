@@ -26,6 +26,7 @@ python v2-to-v3-migrate.py /path/to/memory-tdai --db-only   # schema only
 ## RULES
 
 - Dry-run first, always; run **before** starting the new gateway, never against a live data dir.
+- Windows: set `PYTHONUTF8=1` first — the script logs CJK characters and crashes on cp1252 consoles (`UnicodeEncodeError` before any action).
 - Fresh installs skip this entirely (gateway creates v3 natively).
 - Rollback = restore `vectors.db` from `.bak.{timestamp}`; L2/L3 sources are untouched originals.
 - Re-runs safe (existing columns/files skipped).
