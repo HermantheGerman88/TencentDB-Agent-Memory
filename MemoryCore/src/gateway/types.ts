@@ -29,6 +29,13 @@ export interface HealthResponse {
     pipelineWorker: unknown;
     stateBackend: string;
   };
+  /** Active storage backends, resolved at startup. Lets operators confirm
+   *  which metadata / vector-store engine is actually in use (e.g. that
+   *  STORE_MODE=mongodb did NOT silently downgrade to sqlite). */
+  backends?: {
+    metadata: string;
+    vectorStore: string;
+  };
 }
 
 // ============================

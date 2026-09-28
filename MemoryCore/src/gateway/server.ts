@@ -54,6 +54,7 @@ import { initObservabilityBackend } from "../core/report/factory.js";
 import type { ObservabilityConfig as CoreObservabilityConfig } from "../core/report/types.js";
 import { TracedTaskExecutor } from "../core/report/traced-task-executor.js";
 import { StorePool } from "../core/store/store-pool.js";
+import { resolveStoreMode } from "../utils/enum-guard.js";
 import { validateAndNormalizeRaw, SeedValidationError } from "../core/seed/input.js";
 import { executeSeed } from "../core/seed/seed-runtime.js";
 import type { SeedProgress } from "../core/seed/types.js";
@@ -308,6 +309,8 @@ export class TdaiGateway {
 
   // ── Metadata (v3): shared store pool + per-instance MetadataService ──
   private metadataStorePool: MetadataStorePool | null = null;
+  /** Metadata-plane backend resolved at startup (sqlite | mongodb | mysql). */
+  private metadataBackend: string | null = null;
   private memorySystemUserConfig: MemorySystemUserConfig | undefined;
   private readonly metadataServiceByInstance = new Map<string, MetadataService>();
 
@@ -519,6 +522,7 @@ export class TdaiGateway {
     }
 
     const metadataPool = await this.ensureMetadataStorePool();
+    this.metadataBackend = metadataPool.backend;
     initApiTraceConfig(metadataPool.backend, { enabled: readApiTraceEnabled() });
 
     // ── 初始化可观测性门面层全局后端 ──
@@ -1387,6 +1391,11 @@ export class TdaiGateway {
         pipelineWorker: this.pipelineWorker?.getMetrics() ?? null,
         stateBackend: this.stateBackend ? "connected" : "none",
       },
+      // Active storage backends (resolved at startup).
+      backends: {
+        metadata: this.metadataBackend ?? "unknown",
+        vectorStore: this.storePool?.mode ?? "unknown",
+      },
     };
     sendJson(res, 200, response);
   }
@@ -1785,11 +1794,10 @@ export class TdaiGateway {
     // service-mode integration smoke tests where Redis + COS are real but no
     // VDB is available — set STORE_MODE=sqlite to keep the VDB-dependent
     // pieces local while exercising the rest of the service-mode wiring.
-    const storeModeOverride = process.env.STORE_MODE === "sqlite" || process.env.STORE_MODE === "tcvdb"
-      ? (process.env.STORE_MODE as "sqlite" | "tcvdb")
-      : undefined;
+    // resolveStoreMode warns loudly when STORE_MODE holds an invalid value
+    // (e.g. "mongodb") instead of silently falling back to the deploy default.
     this.storePool = new StorePool({
-      mode: storeModeOverride ?? (this.config.deployMode === "service" ? "tcvdb" : "sqlite"),
+      mode: resolveStoreMode(process.env.STORE_MODE, this.config.deployMode, this.logger),
       memoryCfg: this.config.memory,
       dataDir: this.config.data.baseDir,
       maxStores: this.config.shark.maxInstances,

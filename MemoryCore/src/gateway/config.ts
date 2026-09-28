@@ -12,6 +12,7 @@ import fs from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
 import { getEnv } from "../utils/env.js";
+import { coerceEnum, coerceEnumOrUndefined } from "../utils/enum-guard.js";
 import { parseConfig as parseMemoryConfig } from "../config.js";
 import type { MemoryTdaiConfig } from "../config.js";
 import type { StandaloneLLMConfig } from "../adapters/standalone/llm-runner.js";
@@ -549,12 +550,19 @@ export function loadGatewayConfig(overrides?: Partial<GatewayConfig>): GatewayCo
   }
 
   // Deploy mode: "standalone" (open-source single-node) or "service" (cloud multi-tenant)
-  const rawMode = env("TDAI_DEPLOY_MODE") ?? str(fileConfig, "deployMode") ?? "standalone";
-  const deployMode: DeployMode = rawMode === "service" ? "service" : "standalone";
+  const deployMode: DeployMode = coerceEnum({
+    source: "TDAI_DEPLOY_MODE",
+    value: env("TDAI_DEPLOY_MODE") ?? str(fileConfig, "deployMode"),
+    allowed: ["standalone", "service"] as const,
+    fallback: "standalone",
+  });
 
   // State backend (env > yaml > auto from deployMode)
-  const rawBackend = env("STATE_BACKEND") ?? str(fileConfig, "stateBackend");
-  const stateBackend = rawBackend === "redis" || rawBackend === "local" ? rawBackend : undefined;
+  const stateBackend = coerceEnumOrUndefined({
+    source: "STATE_BACKEND",
+    value: env("STATE_BACKEND") ?? str(fileConfig, "stateBackend"),
+    allowed: ["redis", "local"] as const,
+  });
 
   // Instance ID: service mode requires explicit instanceId from request headers (x-tdai-service-id),
   // standalone mode uses configured or defaults to "default".

@@ -7,6 +7,8 @@
  * Minimal config (zero config): {} — all fields have sensible defaults.
  */
 
+import { coerceEnum } from "./utils/enum-guard.js";
+
 // ============================
 // Type definitions
 // ============================
@@ -496,7 +498,12 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
 
   // --- Store backend ---
   const storeBackendRaw = str(c, "storeBackend") ?? "sqlite";
-  const storeBackend: StoreBackend = storeBackendRaw === "tcvdb" ? "tcvdb" : "sqlite";
+  const storeBackend: StoreBackend = coerceEnum({
+    source: "storeBackend",
+    value: storeBackendRaw,
+    allowed: ["sqlite", "tcvdb"] as const,
+    fallback: "sqlite",
+  });
 
   // --- TCVDB config ---
   const tcvdbGroup = obj(c, "tcvdb");
